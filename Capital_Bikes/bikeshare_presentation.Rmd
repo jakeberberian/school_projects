@@ -1,0 +1,246 @@
+---
+title: "Capital Bikeshare"
+subtitle: "Jake Berberian"
+output: 
+  beamer_presentation:
+    theme: "Goettingen"
+    colortheme: "dove"
+    fonttheme: "structuresmallcapsserif"
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{multirow}
+- \usepackage{wrapfig}
+- \usepackage{float}
+- \usepackage{colortbl}
+- \usepackage{pdflscape}
+- \usepackage{tabu}
+- \usepackage{threeparttable}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r library}
+library(tidyverse)
+library(modelr)
+library(kableExtra)
+library(randomForest)
+library(MASS)
+library(car)
+```
+
+```{r data}
+bikes <- read_csv("~/Fall_2020/STAT-627/Project/Bike-Sharing-Dataset/hour.csv")
+```
+
+
+# Overview
+
+## The Data
+
+The dataset was found using [UCI's Machine Learning Repository](http://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset). It contains data spanning from 1 January 2011 to 31 December 2012 from Capital Bikeshare's official website joined with weather data from [I-weather](www.i-weather.com) and the district's official holiday schedule. It contains the following variables:
+```{r variable_names}
+kbl(names(bikes)[1:6] %>% 
+  cbind(names(bikes)[7:12]) %>% 
+  cbind(names(bikes)[13:17]), col.names = c("", "", ""), booktabs = TRUE) %>% 
+  add_header_above(c("", "Variables" = 1, "")) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+## Hypotheses
+
+Our initial hypotheses are the following:
+
+- Workdays/holidays and days with lower temperatures/worse weather will result in lower usage.
+- We will see a decrease in users in the high summer months (specifically July and August). 
+- We can expect to see `holiday` and `weekday` play the largest role in the number of casual users. 
+
+```{r sample}
+set.seed(51)
+n <- length(bikes$cnt)
+Z <- sample(n, n/2)
+train <- bikes[Z, ] %>% 
+  dplyr::select(-temp)
+test <- bikes[-Z, ] %>% 
+  dplyr::select(-temp)
+```
+
+
+# Discriminant Analysis
+
+```{r binning}
+train <- train %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+
+test <- test %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+
+
+bikes <- bikes %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+```
+
+## The LDA Model
+
+- First, we'll want to bin the hourly data into four categories: heavy usage, constant usage, moderate usage and light usage.
+- Run calculations twice
+  (1) Using `CV = TRUE` to get prediction of class membership from LOOCV.
+  (2) Using `CV = FALSE` to allow us to use `predict()` on our test set and get a classification rate.
+- Our classification rate indicates that we've correctly classified a little over half of the counts (~56.25%).  
+
+```{r lda, fig.height=5}
+bikes_lda <- lda(usage ~ . -instant-dteday-cnt-casual-registered, data = bikes,
+                 CV = TRUE)
+
+table(bikes$usage, bikes_lda$class) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+# mean(bikes$usage == bikes_lda$class)
+```
+
+---
+
+```{r}
+bikes_lda <- lda(usage ~ . -instant-dteday-cnt-casual-registered, data = train)
+lda_pred <- predict(bikes_lda, test)
+
+table(lda_pred$class, test$usage)%>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+mean(lda_pred$class == test$usage) %>% 
+  kbl(booktabs = TRUE, col.names = "class_rate") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+----
+
+```{r}
+data.frame(usage = test[, 17], lda = lda_pred$x) %>% 
+  ggplot(aes(lda.LD1, lda.LD2, color = usage), size = 2.5) +
+  geom_point()
+```
+
+
+## The QDA Model
+```{r qda}
+bikes_qda <- qda(usage ~ . -instant-dteday-cnt-casual-registered, data = train)
+qda_pred <- predict(bikes_qda, test)
+
+# Cross-validation
+kbl(table(qda_pred$class, test$usage), booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+Our classification rate is `r round(mean(qda_pred$class == test$usage), 3)`, which a little better than LDA (56.01%). 
+
+## Conclusions
+- LDA vs. QDA trade-off (Bias-variance trade-off)
+  * LDA is less flexible than QDA, with fewer parameters. 
+  * LDA can suffer from high bias when when the classes have different covariance matrices.
+- Since our training set is fairly large (`r nrow(train)` observations), the variance of the classifier is not a major concern.
+
+
+## Conclusions 
+
+- A possible issue here is that much of the "heavy"-classified data comes from year 2, which skews the data. Since the weather is evenly distributed between years, it makes it difficult for the model to correctly classify observations. 
+- Since we'll trade some bias for variance, we'll go with our QDA model. It better explains the data and since $n$ in the training set is fairly large, the effects of variance are mitigated. 
+
+# Random Forest
+
+## The Model
+
+- We'll use a regression approach, as  the binned data provides too much variance between groups.
+- We'll first try with 250 trees, as to get a good baseline and to not use too much computational power.
+- Judging from our plot, it seems the error levels off around 100 trees, but we'll explore further. 
+
+```{r rf, fig.height=5}
+set.seed(13)
+bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, ntree = 250, importance = TRUE)
+
+plot(bike_rf)
+```
+
+
+## Importance of variables
+
+- We can see that the hour of day has a large influence in the model. Meanwhile, `holiday` has the lowest impact, which disproves our original hypothesis that holiday vs. non-holiday would have a big influence. 
+
+```{r mre_var, fig.height=5}
+varImpPlot(bike_rf)
+```
+
+
+## Cross-validation 
+
+- The optimal number of trees seem to be 227. We'll optimize our model to to follow this.  
+- From our new, optimized model, the mean square error of prediction, given by the test set cross-validation, is 3770.262.
+- Furthermore, we can optimize the number of variables tried at each split, but this would take a good amount of computational power, so we'll be content with `ntree` = 227 and `mtry` = 3.
+
+```{r rf_cv}
+set.seed(13)
+min <- which.min(bike_rf$mse)
+max <- which.max(bike_rf$rsq)
+
+bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, ntree =
+                          which.min(bike_rf$mse), importance = TRUE)
+rf_pred <- predict(bike_rf, test)
+
+pmse <- mean((rf_pred - test$cnt)^2)
+
+
+kbl(data.frame(min, max, pmse), booktabs = TRUE, col.names = c("Min. MSE", "Max. R Sq.", "PMSE")) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+## Conclusions
+
+- Our PMSE is somewhat large. So while the % of variance explained is above 90%, our model doesn't seem to actually perform that well on the testing data. 
+- Random forests take a lot of computational power compared to running a regular regression using `lm()`. 
+
+# Discussion
+
+## Discussion 
+
+- Overall, it's difficult to predict the number of bikers. Perhaps binning would've made it easier, but would not have provided actionable insights. 
+- If the data has converged more to the norm (aka the company still wasn't growing), perhaps our models would have more predictive power.
+- Outcome of hypotheses:
+  * Holidays nor weather played a large part in any of our models. However, workdays did.
+  * There's no decrease in users in the hotter summer months.
+  * Again, `holiday` didn't play a large role, but `weekday` did.
+- Further studies
+  * Logistic regression
+  * More years of data
+  * Testing w/o weather (seemed to not play that large of an impact)
+
+# Citations
+
+## Citations
+Fanaee-T, Hadi, and Gama, Joao, *Event labeling combining ensemble detectors and background knowledge*, Progress in Artificial Intelligence (2013): pp. 1-15, Springer Berlin Heidelberg.
+
+James, Gareth, et al. *An Introduction to Statistical Learning with Applications in R.* 7th ed., Springer, 2017. 
+ 

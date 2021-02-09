@@ -1,0 +1,387 @@
+---
+title: "North Carolina in the 2016 Presidential Election"
+subtitle: "Ian Gardner & Jake Berberian"
+output: 
+  beamer_presentation:
+    theme: "Goettingen"
+    colortheme: "dove"
+    fonttheme: "structuresmallcapsserif"
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{multirow}
+- \usepackage{wrapfig}
+- \usepackage{float}
+- \usepackage{colortbl}
+- \usepackage{pdflscape}
+- \usepackage{tabu}
+- \usepackage{threeparttable}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r library}
+library(tidyverse)
+library(kableExtra)
+library(nnet)
+library(scales)
+```
+
+
+# Overview
+
+## NC Overview
+
+- North Carolina and its 100 counties hold 15 electoral college votes.
+- Give demographic statistics?
+
+
+## Data
+
+```{r data}
+nc <- read_csv("~/Fall_2020/STAT-615/Projects/Project-1/voter_stats.csv")
+
+nc <- nc %>% 
+  mutate(age = factor(age),
+         party_cd = factor(party_cd)) %>% 
+  uncount(total_voters) %>% 
+  drop_na()
+
+nc %>% 
+  head() %>% 
+  slice(1:5) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+## By party affiliation
+
+```{r party_pie}
+nc %>% 
+  group_by(party_cd) %>% 
+  summarize(n = n(),
+            prop = round(n() / nrow(nc), 3)) %>% 
+  arrange(desc(party_cd)) %>% 
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop) %>% 
+  ggplot(aes(x = "", y = prop, fill = party_cd)) + 
+  geom_bar(width = 1, stat = "identity") + 
+  coord_polar("y", start = 0) + 
+  geom_text(aes(y = lab.ypos, label = percent(prop)), color = "white") + 
+  theme_void()
+```
+
+
+## By county
+
+- Below are some of the larger counties in NC, by voter turnout. 
+  * Any county that represents over 2% of the data is below. 
+  
+```{r county_pie}
+nc %>% 
+  group_by(County) %>% 
+  summarize(n = n(),
+            prop = round(n() / nrow(nc), 3)) %>% 
+  arrange(desc(County)) %>% 
+  filter(prop > 0.02) %>% 
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop) %>% 
+  ggplot(aes(x = "", y = prop, fill = County)) + 
+  geom_bar(width = 1, stat = "identity") + 
+  coord_polar("y", start = 0) + 
+  geom_text(aes(y = lab.ypos, label = percent(prop)), color = "white") + 
+  theme_void()
+```
+
+
+
+## By sex
+
+```{r sex_pie}
+nc %>% 
+  group_by(sex_code) %>% 
+  summarize(n = n(),
+            prop = round(n() / nrow(nc), 3)) %>%
+  arrange(desc(sex_code)) %>% 
+  mutate(ypos = cumsum(prop) - 0.5 * prop) %>% 
+  ggplot(aes(x = "", y = prop, fill = sex_code)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  geom_text(aes(y = ypos, label = percent(prop)), color = "white") +
+  theme_void()
+```
+
+
+## By race
+```{r race_pie}
+nc %>% 
+  mutate(race_code = case_when(
+    race_code == "W" ~ "White",
+    race_code == "B" ~ "Black",
+    race_code == "A" ~ "Asian",
+    race_code == "I" ~ "Native American",
+    race_code == "M" ~ "Multiracial",
+    race_code == "O" ~ "Other",
+    race_code == "P" ~ "Pacific Islander",
+    TRUE ~ "Undesignated/no response"
+  )) %>% 
+  group_by(race_code) %>% 
+  summarize(n = n(),
+            prop = round(n() / nrow(nc), 3)) %>% 
+  arrange(desc(race_code)) %>% 
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop) %>% 
+  ggplot(aes(x = "", y = prop, fill = race_code)) + 
+  geom_bar(width = 1, stat = "identity") + 
+  coord_polar("y", start = 0) + 
+  geom_text(aes(y = lab.ypos, label = percent(prop)), color = "white") + 
+  theme_void()
+```
+
+## By age
+ 
+```{r age_pie}
+nc %>% 
+  group_by(age) %>% 
+  summarize(n = n(),
+            prop = round(n() / nrow(nc), 3)) %>% 
+  arrange(desc(age)) %>% 
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop) %>% 
+  ggplot(aes(x = "", y = prop, fill = age)) + 
+  geom_bar(width = 1, stat = "identity") + 
+  coord_polar("y", start = 0) + 
+  geom_text(aes(y = lab.ypos, label = percent(prop)), color = "white") + 
+  theme_void()
+```
+
+
+# Multinominal Logistic Regression
+
+## An Overview
+
+- Models how multinomial response variable *Y* depends on a set of $k$ explanatory variables $X = (X_1, X_2, ..., X_k).$
+  * Is classified as a generalized linear model where the random component assumes that Y ~ Multinomial(n, $\pi$).
+  * $\pi$ is a probability success vector for each given *Y* category. 
+- The link function is generalized logit. 
+  * A link function transforms the probabilities of a categorical variable into a continuous, unbounded scale. 
+- Since our data is nominal, we must perform nominal regression
+  * Nominal = unordered
+- PMF: $\frac{n!}{x_1 !, ..., x_k!} p_1^{x_1}...p_k^{x_k}$
+
+## Considerations 
+
+- Our sample size should be large enough, as multinomial regression uses maximum likelihood estimates. With well over 800,000 observations, our data satisfies this assumption.
+- Separation between outcome and predictor variables
+- No NAs
+  * All NA observations (0 in here) have been dropped from this dataset.
+
+
+## Applications in R
+
+- To simplify computation, we'll look at strictly Orange County data. 
+- We'll split this data into training and testing data, through random sampling.
+  * This allows for cross-validation, or checking the accuracy of our model. 
+
+
+```{r split}
+set.seed(13)
+
+train <- nc %>% 
+  sample_frac(0.5)
+
+test <- nc %>% 
+  anti_join(train)
+
+train_oc <- train %>% 
+  filter(County == "Orange")
+
+test_oc <- nc %>% 
+  filter(County == "Orange")
+```
+
+---
+
+- Using the `nnet` package in R, we'll use the function `multinom()` to carry out our multinomial logistic regression.
+  * Democrat is our baseline level of *party_cd* when the regression is run.
+  * Coefficients of our regression are outputed below. 
+
+```{r regress, results = "hide"}
+oc_mlr <- multinom(party_cd ~ race_code + sex_code + age, data = train_oc)
+```
+
+```{r regress_output}
+kbl(summary(oc_mlr)$coefficients, booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+
+## Importance of variables
+
+- Unlike `summary()` with linear and generalized linear regression models, `multinom()` doesn't output the importance of each variable. 
+  * For small p-values, let's say $\alpha = 0.05$, we'll consider the variable to be "important." 
+  * No variables that are entirely insignificant, so we'll keep all of them in there.
+
+```{r varimp}
+z <- summary(oc_mlr)$coefficients / summary(oc_mlr)$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1)) * 2
+
+kbl(p, booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+## Cross-validation
+
+
+```{r mlr_cv}
+mlr_pred <- predict(oc_mlr, test_oc, "probs")
+
+mlr_pred <- predict (oc_mlr, test_oc)
+kbl(table(mlr_pred, test_oc$party_cd), booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+- The above table is our confusion matrix. 
+  * Horizontal is our testing data results and vertically is our predicted results. Diagonal is correctly classified  
+- Interesting that our model *never* classifies a voter as a Republican or Libertarian. 
+  * Possibly due to differing demographics amoungst those parties
+- Our classification rate is `r round(mean(mlr_pred == test_oc$party_cd), 4) * 100`%.
+
+## Intepretation of Results
+
+```{r interp}
+kbl(coef(oc_mlr)[, 2], booktabs = TRUE, col.names = "race_codeB") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+A one-unit decrease in the variable *race_codeB* is associated with the decrease in the log odds of being a Libertarian vs. a Democrat in the amount of 2.31. 
+
+## Risk Ratio
+
+- We can find the corresponding risk ratios, by exponentiation of all of our log odds. 
+- The relative risk ratio for a one unit increase in the variable *race_codeB* is 0.0996 for being a Libertarian vs. a Democrat. 
+
+```{r expo}
+kbl(exp(coef(oc_mlr))[, 2], col.names = "race_codeB", booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+# Discriminant Analysis
+
+## Overview
+
+- Clustering technique that is closely related to PCA. 
+- Model the distribution of predictors $X$ separately (opposed to logistic regression) in each of the response classes and use Bayes' theorem to flip these into estimates for $\Pr(Y = k | X =x)$
+  * Bayes' Theorem: $\Pr(A|B)=\frac{\Pr(B|A)\Pr(A)}{\Pr(B|A)\Pr(A)+\Pr(B|\neg A)\Pr(\neg A)}$
+- Use it when classes are well-separated, if $n$ is small & $Y$ is approximately normal, and is popular if there are more than two response classes. 
+- LDA vs QDA
+  * LDA attempts to create a linear boundary between classifiers, while QDA creates a non-linear boundary.
+
+
+## Applications in R: LDA
+
+
+```{r lda, echo = TRUE}
+library(MASS)
+nc_lda <- lda(party_cd ~ race_code + sex_code + age, 
+              data = train_oc)
+lda_pred <- predict(nc_lda, test_oc)
+```
+
+- The below output is only the first few terms of the discriminant analysis. 
+
+```{r lda_out}
+nc_lda$scaling %>% 
+  head(4) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+## Cross-validation: LDA
+
+- Again, we see that our model fails to predict any observation to be Republican.
+- We see our classification rate on our testing set is just barely smaller than that of our multinomial logistic regression.
+
+```{r cv_lda}
+table(lda_pred$class, test_oc$party_cd) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+
+mean(lda_pred$class == test_oc$party_cd) %>% 
+  kbl(booktabs = TRUE, col.names = "Classification Rate") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+---
+
+- We see that linear discriminant analysis does not do a great job either. We would like to see four distinct clusters, one for each party. 
+- It's safe to conclude that LDA does not perform well and our classification rate is probably misleading and higher than it should be.
+- There are a ton of overlapping points here. 
+
+```{r lda_plot, fig.height=5}
+data.frame(party = test_oc[, 4], lda = lda_pred$x) %>% 
+  ggplot(aes(lda.LD1, lda.LD2, color = party_cd), size = 2.5) +
+  geom_point(position = position_jitter(0.01, 0.01))
+```
+
+## Applications in R: QDA
+
+```{r qda, echo = TRUE}
+nc_qda <- qda(party_cd ~ race_code + sex_code + age, 
+              data = train_oc)
+qda_pred <- predict(nc_qda, test_oc)
+```
+
+
+- The below output are the prior probabilities necessary for Bayes' Theorem. These are the proportion of training observations from each group.
+  * For example, there are approximately `r percent(nc_qda$prior[1])` of the training observations in the Democrat group. 
+  * As expected, these sum to 1. 
+
+```{r qda_out}
+nc_qda$prior %>% 
+  kbl(booktabs = TRUE, col.names = "Prior Probabilites") %>% 
+  kable_styling(latex_options = c("striped"))
+```
+
+
+## Cross-validation: QDA
+
+- We see that QDA predicts some Republicans, but is still somewhat concentrated in it's prediction. This is to be expected. 
+- However, we see a much lower classification rate. This is probably more accurate too. Less overfitting of the *testing* data. 
+
+```{r cv_qda}
+table(qda_pred$class, test_oc$party_cd) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+
+mean(qda_pred$class == test_oc$party_cd) %>% 
+  kbl(booktabs = TRUE, col.names = "Classification Rate") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+# Conclusions
+
+## Conclusions
+
+- One thing that hasn't been discussed is that the party code UNA indicates unaffiliated. This could throw off our analyses greatly, as unaffiliated voters generally do not take a certain demographics like the two major parties do. 
+  * One of the fastest growing electorates. 
+- Neither of our predictive techniques performed that well on our data.
+  * Could be due to the nature of only looking at one county.
+  * This is why we poll. If it were this easy, then elections would be no fun. 
+- If we had to pick a model, we'd likely go with our multinomial logistic regression.
+  * Discriminant analysis usage may not be the best, with a sufficiently large $n$ and some colinearity.
+
+# Sources
+
+## Sources
+- https://stats.idre.ucla.edu/r/dae/multinomial-logistic-regression/
+- James, Gareth, et al. *An Introduction to Statistical Learning with Applications in R.* 7th ed., Springer, 2017. 
+

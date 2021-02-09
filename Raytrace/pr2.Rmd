@@ -1,0 +1,29 @@
+---
+title: "Project 2"
+author: "Jake Berberian"
+output: pdf_document
+---
+
+**Problem 1:** Compute (by hand)
+
+  - The tangent direction$^2$ through the point $(x, p(x))$,
+  
+  - The angle between (a) the perpendicular to the tangent plane through $(x, p(x))$ (the "normal axis") and (b) the line connecting $(x_s, y_s)$ and $(x, p(x))$. Your answer can be in terms of the derivative of $p$ or in terms of the coefficient $a_i$. This is the *angle of incidence*. Replacing $(x_s, y_s)$ with $(x_c, y_c)$ yields the *angle of reflection*. 
+
+
+Our tangent direction$^2$ through $(x, p(x))$ is given by
+
+$$p'(x) = a_1 + 2a_2x+...+na_nx^{n-1}$$
+
+Following, our perpendicular to the tangent can be represented as
+
+$$\perp = \arctan(\frac{1}{-p'(x)})$$
+
+Furthermore, the line between $(x_s, y_s)$ and $(x, p(x))$ can be represented as:
+
+$$\arctan(\frac{p(x) - y_s}{x - x_s})$$
+
+And thus,
+
+$$Angle\ of\ incidence = \lvert \arctan(\frac{1}{-p'(x)}) - \arctan(\frac{p(x) - y_s}{x - x_s})\rvert$$
+

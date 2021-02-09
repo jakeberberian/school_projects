@@ -1,0 +1,428 @@
+---
+title: "Capital Bikeshare"
+subtitle: "Jake Berberian"
+output: 
+  beamer_presentation:
+    theme: "Goettingen"
+    colortheme: "dove"
+    fonttheme: "structuresmallcapsserif"
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{multirow}
+- \usepackage{wrapfig}
+- \usepackage{float}
+- \usepackage{colortbl}
+- \usepackage{pdflscape}
+- \usepackage{tabu}
+- \usepackage{threeparttable}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r library}
+library(tidyverse)
+library(modelr)
+library(kableExtra)
+library(randomForest)
+library(MASS)
+library(car)
+```
+
+```{r data}
+bikes <- read_csv("~/Fall_2020/STAT-627/Project/Bike-Sharing-Dataset/hour.csv")
+```
+
+
+# Overview
+
+## The Company
+
+![]("cap_bike.png")
+
+Capital Bikeshare is a bikeshare system that supports the DMV-area. It has around 5000 bikes system-wide, with almost 600 stations throughout. They charge \$2 for a 30-minute trip, \$8 for the day, or \$85 for a year-long membership, which gives access to unlimited 30-minute rides. 
+
+## The Data
+
+The dataset was found using [UCI's Machine Learning Repository](http://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset). It contains data spanning from 1 January 2011 to 31 December 2012 from Capital Bikeshare's official website joined with weather data from [I-weather](www.i-weather.com) and the district's official holiday schedule. It contains the following variables:
+```{r variable_names}
+kbl(names(bikes)[1:6] %>% 
+  cbind(names(bikes)[7:12]) %>% 
+  cbind(names(bikes)[13:17]), col.names = c("", "", ""), booktabs = TRUE) %>% 
+  add_header_above(c("", "Variables" = 1, "")) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+## More on the variables
+
+Let's take a closer look at some of the variables:
+
+- `dteday` is the date of the observations
+- `season` is the season, 1 = winter, 2 = spring, 3 = summer, 4 = fall
+- `holiday` is decided by the District's official holiday calendar' 0 = no holiday, 1 = holiday
+- `weathersit` describes the weather: 
+  * 1 = clear, few clouds, or partly cloudy
+  * 2 = mist and/or cloudy
+  * 3 = light snow, light rain, thunderstorm
+  * 4 = heavy rain, ice pallets, heavy thunderstorm, snow + fog
+- `temp` is a normalized temperature statistic in Celsius. 
+- `atemp` is a normalized "real feel" temperature statistic in Celsius.
+- `casual`, `registed`, and `cnt` are count statistics counting the number of non-registered users, registered users, and total users, respectively.
+
+## The Plan
+
+1. Explore the data
+2. Multiple Linear Regression to predict number of riders
+3. LDA/QDA to predict the binned number of riders
+3. Random Forests to predict the number of riders
+
+
+## Hypotheses
+
+Our initial hypotheses are the following:
+
+- Workdays/holidays and days with lower temperatures/worse weather will result in lower usage.
+- We will see a decrease in users in the high summer months (specifically July and August). 
+- We can expect to see `holiday` and `weekday` play the largest role in the number of casual users. 
+
+
+## Problems 
+
+- Predicting number of users will be difficult, as Capital Bikeshare was gaining notoriety during these years. 
+- Year-to-year data has likely now stabilized, but we don't expect to see any definitive patterns.
+- The data takes place over a two-year period, so it's hard to gauge a ton when each date has only two data points. 
+- While Capital Bikeshare has year-by-year data, it does not include all the same variables. As a result, we'll split our data into testing and training sets.
+
+```{r sample}
+set.seed(51)
+n <- length(bikes$cnt)
+Z <- sample(n, n/2)
+train <- bikes[Z, ] %>% 
+  dplyr::select(-temp)
+test <- bikes[-Z, ] %>% 
+  dplyr::select(-temp)
+```
+
+
+# Data Exploration
+
+## Riders per day
+
+As mentioned, we can see that the number of users increased greatly during 2012. Furthermore, we see evidence of a cyclical shape, which seems to indicate that the date/season does have an effect: winter months see lower usage, while the summer months see some of the highest usage. This contradicts our original hypothesis that suggested that July and August would see slightly lower counts.
+
+```{r ride_per_day, fig.height=5}
+bikes %>% 
+  group_by(dteday) %>% 
+  summarize(count = sum(cnt)) %>% 
+  ggplot(aes(x = dteday, y = count)) +
+  geom_point()
+```
+
+
+## Temperature & weather
+
+The first thing to notice is that there seems to be some sort of funnel shape to the plot. This would suggest that there's some "optimal" real-feel temperature for bikshares. Furthermore, we see very few observations of extreme weather. In fact, there are only three days over the course of the two years: 26 Jan 2011, 9 Jan 2012, and 21 Jan 2012.  
+
+```{r temp_wether, fig.height=5}
+bikes %>% 
+  ggplot(aes(x = cnt, y = atemp, col = weathersit)) +
+  geom_point() +
+  scale_color_viridis_c()
+```
+
+
+## Holidays
+
+As we see, the average number of users on holidays (3735) is sizabley smaller than the average number on non-holidays (4527). However, some of these holidays have less bikers than expected. For example, New Year's Eve and Day in both 2012 and 2013 had around 2200 bikers (sans New Years Day 2011). Average for any given day is 4504 bikers.
+
+```{r holiday_plot, fig.height=5}
+bikes %>% 
+  group_by(dteday, holiday) %>% 
+  summarize(total = sum(cnt)) %>%
+  group_by(holiday) %>% 
+  summarize(avg = mean(total)) %>% 
+  ggplot(aes(x = holiday, y = avg)) +
+  geom_col()
+```
+
+
+# Multiple Linear Regression
+
+
+## Model
+
+We'll run a regression on our data. We removed redundant variables and the variable `yr`, as that is years after 2011 which isn't necessary. The resulting coefficients are below:
+
+```{r mlr}
+bikes_lm <- lm(cnt ~ . -instant-dteday-yr-casual-registered, data = train)
+kbl(summary(bikes_lm)$coef, booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+---
+
+## Residual Analysis
+
+- We'll first check to see if our residuals are normally distributed. The plot shows a decent right skew, so we'll proceed with caution.     
+
+```{r lm_resids}
+bikes %>% 
+  add_residuals(bikes_lm) %>% 
+  ggplot(aes(x = resid)) +
+  geom_histogram()
+```
+
+
+---
+
+## Multicollinearity
+
+```{r vif_lm}
+kbl(round(vif(bikes_lm), 4), col.names = "vif", booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+As expected, `temp` and `atemp` have extremely high variance inflation factors. Furthermore, `season` and `mnth` have higher VIFs, which also would make sense. We'll create a reduced model without `temp` or `season`. This is because their alternative variables intuitively explain more. 
+
+
+## Model 2
+
+We'll try out this model with `temp` and `season` removed. 
+
+```{r lm_bikes2}
+bikes_lm2 <- lm(cnt ~ . -instant-dteday-yr-casual-registered-season, data = train)
+kbl(summary(bikes_lm2)$coef, booktabs = TRUE) %>% 
+  kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+## Model Comparison: General Linear F-test
+
+With an F-stat of `r round(anova(bikes_lm2, bikes_lm)[2, 5], 4)`, we have a corresponding p-value of less than 0.00001. Thus, we can conclude with strong statistical certainty that our full model is favored. However, we need to remember that there was strong multicollinearity in our full model. 
+
+```{r bikes_1v2}
+kbl(anova(bikes_lm2, bikes_lm), booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+## Model Comparison: Cross-validation
+
+- Our mean square error, calculated through cross-validation is very high.
+- Linear regression may not perform well as a predictive power. 
+  * Look at year-to-year inconsistent
+
+```{r cv_lm}
+lm_pred <- predict(bikes_lm2, test)
+
+pmse <- mean((lm_pred - test$cnt)^2)
+kbl(pmse, booktabs = TRUE, col.names = "PMSE") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+
+## Conclusions
+
+- Overall, neither linear model did a great job of explaining the variance in `cnt`. Their respective $R^2$ values: 
+  * Full model: `r round(summary(bikes_lm)$r.sq, 4)`
+  * Reduced model: `r round(summary(bikes_lm2)$r.sq, 4)`
+- It seems that there is a lot of correlation between variables and that with so many variables, we could perhaps try some dimensionality-reduction techniques in the future (PCA, etc.)
+  * Majority of variables are important, so look at better variable selection methods. 
+
+# Discriminant Analysis
+
+
+## The Setup
+
+- First, we'll want to bin the hourly data into four categories: heavy usage, constant usage, moderate usage and light usage.
+- We'll then run LDA and QDA on our data and cross-validate using our testing set
+- Finally, we'll discuss if LDA or QDA provides a better clustering method.
+
+`# Discriminant Analysis
+
+```{r binning}
+train <- train %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+
+test <- test %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+
+
+bikes <- bikes %>% 
+  mutate(usage = case_when(
+    cnt < 40 ~ "light",
+    cnt < 142 ~ "decent",
+    cnt < 281 ~ "constant",
+    TRUE ~ "heavy"
+  )) %>% 
+  mutate(usage = as.factor(usage))
+```
+
+## The LDA Model
+
+- First, we'll want to bin the hourly data into four categories: heavy usage, constant usage, moderate usage and light usage.
+- Run calculations twice
+  (1) Using `CV = TRUE` to get prediction of class membership from LOOCV.
+  (2) Using `CV = FALSE` to allow us to use `predict()` on our test set and get a classification rate.
+- Our classification rate indicates that we've correctly classified a little over half of the counts (~56.01%).  
+
+```{r lda, fig.height=5}
+bikes_lda <- lda(usage ~ . -instant-dteday-cnt-casual-registered, data = bikes,
+                 CV = TRUE)
+
+table(bikes$usage, bikes_lda$class) %>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+# mean(bikes$usage == bikes_lda$class)
+```
+
+---
+
+```{r}
+bikes_lda <- lda(usage ~ . -instant-dteday-cnt-casual-registered, data = train)
+lda_pred <- predict(bikes_lda, test)
+
+table(lda_pred$class, test$usage)%>% 
+  kbl(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+
+mean(lda_pred$class == test$usage) %>% 
+  kbl(booktabs = TRUE, col.names = "class_rate") %>% 
+  kable_styling(latex_options = "striped")
+```
+
+
+----
+
+```{r}
+data.frame(usage = test[, 17], lda = lda_pred$x) %>% 
+  ggplot(aes(lda.LD1, lda.LD2, color = usage), size = 2.5) +
+  geom_point()
+```
+
+
+## The QDA Model
+```{r qda}
+bikes_qda <- qda(usage ~ . -instant-dteday-cnt-casual-registered, data = train)
+qda_pred <- predict(bikes_qda, test)
+
+# Cross-validation
+kbl(table(qda_pred$class, test$usage), booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+Our classification rate is `r round(mean(qda_pred$class == test$usage), 3)`, which a little better than LDA (56.01%). 
+
+## Conclusions
+- LDA vs. QDA trade-off (Bias-variance trade-off)
+  * LDA is less flexible than QDA, with fewer parameters. 
+  * LDA can suffer from high bias when when the classes have different covariance matrices.
+- Since our training set is fairly large (`r nrow(train)` observations), the variance of the classifier is not a major concern.
+
+
+## Conclusions 
+
+- A possible issue here is that much of the "heavy"-classified data comes from year 2, which skews the data. Since the weather is evenly distributed between years, it makes it difficult for the model to correctly classify observations. 
+- Since we'll trade some bias for variance, we'll go with our QDA model. It better explains the data and since $n$ in the training set is fairly large, the effects of variance are mitigated. 
+
+# Random Forest
+
+## The Setup
+
+- We can use either a classification approach (with the binned data) or regression approach (with `cnt` variable)
+  * Ultimately, this is relatively important to Capital Bikeshare, the binned data provides too much variance between groups (heavy takes the range of 281 to 977 bikers. That's a difference of three-fold). 
+- So, we'll use the `cnt` variable and run a random forest regression.
+- We'll try to find the optimal number of trees and number of variables that are randomly sampled at each split. 
+
+## The Model
+
+- We'll first try with 250 trees, as to get a good baseline and to not use too much computational power.
+- Judging from our plot, it seems the error levels off around 100 trees, but we'll explore further. 
+
+```{r rf}
+set.seed(13)
+bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, ntree = 250, importance = TRUE)
+
+plot(bike_rf)
+```
+
+
+## Importance of variables
+```{r variables_rf}
+kbl(importance(bike_rf), booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+## Importance of variables
+
+- We can see from both the table and plot that the hour of day has a large influence in the model. Meanwhile, `holiday` has the lowest impact, which disproves our original hypothesis that holiday vs. non-holiday would have a big influence. 
+
+```{r mre_var, fig.height=5}
+varImpPlot(bike_rf)
+```
+
+
+## Cross-validation 
+
+- The optimal number of trees seem to be 211. We'll optimize our model to to follow this.  
+- From our new, optimized model, the mean square error of prediction, given by the test set cross-validation, is 3261.23.
+- Furthermore, we can optimize the number of variables tried at each split, but this would take a good amount of computational power, so we'll be content with `ntree` = 211 and `mtry` = 3.
+
+```{r rf_cv}
+set.seed(13)
+min <- which.min(bike_rf$mse)
+max <- which.max(bike_rf$rsq)
+
+bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, ntree =
+                          which.min(bike_rf$mse), importance = TRUE)
+rf_pred <- predict(bike_rf, test)
+
+pmse <- mean((rf_pred - test$cnt)^2)
+
+
+kbl(data.frame(min, max, pmse), booktabs = TRUE, col.names = c("Min. MSE", "Max. R Sq.", "PMSE")) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+## Conclusions
+
+- Our PMSE is very large, but much smaller than that of linear regression (by over 6x). So while the % of variance explained it above 90%, our model doesn't seem to actually perform that well on the testing data. 
+- Random forests take a lot of computational power compared to running a regular regression using `lm()`. 
+
+# Discussion
+
+## Discussion 
+
+- Overall, it's difficult to predict the number of bikers. Perhaps binning would've made it easier, but would not have provided actionable insights. 
+- If the data has converged more to the norm (aka the company still wasn't growing), perhaps our models would have more predictive power.
+- Outcome of hypotheses:
+  * Holidays nor weather played a large part in any of our models. However, workdays did.
+  * There's no decrease in users in the hotter summer months.
+  * Again, `holiday` didn't play a large role, but `weekday` did.
+- Further studies
+  * Logistic regression
+  * More years of data
+  * Testing w/o weather (seemed to not play that large of an impact)
+
+# Citations
+
+## Citations
+Fanaee-T, Hadi, and Gama, Joao, *Event labeling combining ensemble detectors and background knowledge*, Progress in Artificial Intelligence (2013): pp. 1-15, Springer Berlin Heidelberg.
+
+James, Gareth, et al. *An Introduction to Statistical Learning with Applications in R.* 7th ed., Springer, 2017. 
+ 
