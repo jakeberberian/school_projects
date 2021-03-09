@@ -42,7 +42,7 @@ library(scales)
 ## Data
 
 ```{r data}
-nc <- read_csv("~/Fall_2020/STAT-615/Projects/Project-1/voter_stats.csv")
+nc <- read_csv("https://raw.githubusercontent.com/jakeberberian/school_projects/main/NC_Voting/voter_stats.csv")
 
 nc <- nc %>% 
   mutate(age = factor(age),
@@ -152,6 +152,7 @@ nc %>%
   geom_bar(width = 1, stat = "identity") + 
   coord_polar("y", start = 0) + 
   geom_text(aes(y = lab.ypos, label = percent(prop)), color = "white") + 
+  ggtitle("Age Demographics of Voters in NC") +
   theme_void()
 ```
 

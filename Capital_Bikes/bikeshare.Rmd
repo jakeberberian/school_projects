@@ -33,7 +33,7 @@ library(car)
 ```
 
 ```{r data}
-bikes <- read_csv("~/Fall_2020/STAT-627/Project/Bike-Sharing-Dataset/hour.csv")
+bikes <- read_csv("https://raw.githubusercontent.com/jakeberberian/school_projects/main/Capital_Bikes/Bike-Sharing-Dataset/hour.csv")
 ```
 
 
@@ -388,8 +388,8 @@ set.seed(13)
 min <- which.min(bike_rf$mse)
 max <- which.max(bike_rf$rsq)
 
-bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, ntree =
-                          which.min(bike_rf$mse), importance = TRUE)
+bike_rf <- randomForest(cnt ~ . -instant-dteday-usage-casual-registered, data = train, 
+                        ntree = which.min(bike_rf$mse), importance = TRUE)
 rf_pred <- predict(bike_rf, test)
 
 pmse <- mean((rf_pred - test$cnt)^2)

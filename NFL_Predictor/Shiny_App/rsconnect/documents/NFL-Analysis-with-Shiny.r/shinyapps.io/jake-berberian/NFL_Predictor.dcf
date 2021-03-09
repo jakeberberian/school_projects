@@ -1,0 +1,13 @@
+name: NFL_Predictor
+title: NFL_Predictor
+username:
+account: jake-berberian
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2166954
+bundleId: 3091167
+url: https://jake-berberian.shinyapps.io/NFL_Predictor/
+when: 1588356661.19393
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: data/.DS_Store
